@@ -1,0 +1,7 @@
+{
+  "name": "Feidee (飞蛋记账)",
+  "render_readme": true,
+  "content_in_root": false,
+  "filename": "feidee",
+  "homeassistant": "2023.8.0"
+}

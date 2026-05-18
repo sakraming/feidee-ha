@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Feidee login",
+        "description": "Enter your Feidee phone number and password",
+        "data": {
+          "phone": "Phone",
+          "password": "Password"
+        }
+      },
+      "book": {
+        "title": "Select books",
+        "description": "Select one or more books; each book becomes a separate device",
+        "data": {
+          "book_ids": "Books"
+        }
+      },
+      "sensors": {
+        "title": "Select sensors",
+        "description": "Choose metrics to expose (each selected book gets its own entities)",
+        "data": {
+          "sensor_keys": "Metrics"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid credentials",
+      "cannot_connect": "Cannot connect to Feidee servers",
+      "no_books": "No cloud books found",
+      "no_books_selected": "Select at least one book",
+      "no_sensors_selected": "Select at least one metric",
+      "unknown": "Unknown error, check logs"
+    },
+    "abort": {
+      "already_configured": "This Feidee account is already configured",
+      "book_not_found": "Book not found"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Feidee options",
+        "description": "Change enabled metrics and update interval; the integration reloads after saving",
+        "data": {
+          "sensor_keys": "Metrics",
+          "scan_interval": "Update interval (seconds, 300-3600)"
+        }
+      }
+    },
+    "error": {
+      "no_sensors_selected": "Select at least one metric"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "monthly_expense": { "name": "Monthly expense" },
+      "monthly_income": { "name": "Monthly income" },
+      "monthly_balance": { "name": "Monthly balance" },
+      "today_expense": { "name": "Today expense" },
+      "today_income": { "name": "Today income" },
+      "weekly_expense": { "name": "Weekly expense" },
+      "weekly_income": { "name": "Weekly income" },
+      "yearly_expense": { "name": "Yearly expense" },
+      "yearly_income": { "name": "Yearly income" },
+      "total_balance": { "name": "Book total balance" }
+    }
+  }
+}
