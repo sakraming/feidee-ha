@@ -10,10 +10,17 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
 
-from .api import FeideeClient
+from .api import (
+    ERR_CLIENT_PARAMS,
+    ERR_INVALID_CREDENTIALS,
+    FeideeApiError,
+    FeideeAuthError,
+    FeideeClient,
+    normalize_password,
+    normalize_phone,
+)
 from .const import (
     CONF_BOOKS,
     CONF_ENABLED_SENSORS,
@@ -28,7 +35,6 @@ from .sensor_types import sensor_selector_options, validate_enabled_sensors
 _LOGGER = logging.getLogger(__name__)
 CONF_BOOK_IDS = "book_ids"
 CONF_SENSOR_KEYS = "sensor_keys"
-PROBE_DEVICE_ID = "fed-ha-config-flow-probe"
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -48,20 +54,28 @@ def _sensor_selector() -> selector.SelectSelector:
     )
 
 
-class CannotConnect(HomeAssistantError):
-    """Unable to connect to Feidee API."""
-
-
-class InvalidAuth(HomeAssistantError):
-    """Invalid credentials."""
-
-
-class NoBooks(HomeAssistantError):
-    """No cloud books found."""
+def _map_login_error(err: Exception) -> str:
+    if isinstance(err, FeideeAuthError):
+        body = (getattr(err, "response_body", "") or "").lower()
+        if err.code == ERR_INVALID_CREDENTIALS:
+            return "invalid_auth"
+        if err.code == ERR_CLIENT_PARAMS:
+            return "client_error"
+        if err.status_code == 500 and ("captcha" in body or "verification" in body):
+            return "captcha_failed"
+        if err.status_code in {429, 403} and ("captcha" in body or "vcid" in body or "vid" in body):
+            return "captcha_required"
+    if isinstance(err, FeideeApiError):
+        return "cannot_connect"
+    if isinstance(err, httpx.RequestError):
+        return "cannot_connect"
+    return "unknown"
 
 
 async def _validate_login(phone: str, password: str) -> list[dict[str, Any]]:
-    client = FeideeClient(phone, password, device_id=PROBE_DEVICE_ID)
+    phone = normalize_phone(phone)
+    password = normalize_password(password)
+    client = FeideeClient(phone, password)
     try:
         await client.login()
         books = await client.list_books()
@@ -87,19 +101,31 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            phone = user_input[CONF_PHONE]
-            password = user_input[CONF_PASSWORD]
+            phone = normalize_phone(user_input[CONF_PHONE])
+            password = normalize_password(user_input[CONF_PASSWORD])
             try:
                 books = await _validate_login(phone, password)
-            except httpx.HTTPStatusError as err:
-                _LOGGER.error("Login failed: %s", err)
-                errors["base"] = "invalid_auth"
             except httpx.RequestError as err:
                 _LOGGER.error("Connection error: %s", err)
                 errors["base"] = "cannot_connect"
-            except Exception as err:
-                _LOGGER.exception("Unexpected error during login: %s", err)
-                errors["base"] = "unknown"
+            except FeideeAuthError as err:
+                _LOGGER.error(
+                    "Feidee auth flow failed: %s (code=%s http=%s body=%s)",
+                    err,
+                    getattr(err, "code", None),
+                    getattr(err, "status_code", None),
+                    getattr(err, "response_body", None),
+                )
+                errors["base"] = _map_login_error(err)
+            except FeideeApiError as err:
+                _LOGGER.error(
+                    "Feidee API failed: %s (code=%s http=%s body=%s)",
+                    err,
+                    getattr(err, "code", None),
+                    getattr(err, "status_code", None),
+                    getattr(err, "response_body", None),
+                )
+                errors["base"] = _map_login_error(err)
             else:
                 if not books:
                     errors["base"] = "no_books"

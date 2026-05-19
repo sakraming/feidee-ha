@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Feidee login",
-        "description": "Enter your Feidee phone number and password",
+        "description": "Enter your Feidee phone number and password; if a captcha is required, the flow will guide you through it",
         "data": {
           "phone": "Phone",
           "password": "Password"
@@ -30,6 +30,7 @@
       "no_books": "No cloud books found",
       "no_books_selected": "Select at least one book",
       "no_sensors_selected": "Select at least one metric",
+      "client_error": "Feidee rejected client parameters; update the integration and retry",
       "unknown": "Unknown error, check logs"
     },
     "abort": {

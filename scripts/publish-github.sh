@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 REPO="${1:-zhangqiming/feidee-ha}"
-VERSION="v0.3.0"
+VERSION="v0.4.0"
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "Install GitHub CLI: brew install gh"
@@ -20,7 +20,7 @@ else
   git push -u origin main
 fi
 
-git push origin "${VERSION}" 2>/dev/null || git push origin "${VERSION}"
+git push origin "${VERSION}" 2>/dev/null || true
 
 gh release create "${VERSION}" \
   --title "Feidee HA ${VERSION}" \

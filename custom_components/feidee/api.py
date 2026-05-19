@@ -6,7 +6,10 @@ import hashlib
 import json
 import logging
 import random
+import re
+import tempfile
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
@@ -35,7 +38,6 @@ ENCODE_VERSION = "V4"
 OAUTH_SCOPE = "user"
 ACCOUNTS_SCENE = "Common"
 
-# --- Client fingerprint defaults (web cab-web profile) ---
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
@@ -47,31 +49,86 @@ DEFAULT_PRODUCT_VERSION = "148.0.0.0"
 DEFAULT_LOCALE = "zh-CN"
 DEFAULT_TIME_ZONE = "Asia/Shanghai"
 
+# Must match the working cab-web device_id from 随手记.py demo
+DEFAULT_DEVICE_ID = "fed-8e89c1f1-183f-4829-8c95-179232e50a02"
+DEVICE_JSON = json.dumps(
+    {
+        "model": DEFAULT_DEVICE_MODEL,
+        "platform": DEFAULT_DEVICE_PLATFORM,
+        "os_version": "",
+        "device_id": DEFAULT_DEVICE_ID,
+        "product_name": DEFAULT_PRODUCT_NAME,
+        "product_version": DEFAULT_PRODUCT_VERSION,
+        "locale": DEFAULT_LOCALE,
+        "time_zone": DEFAULT_TIME_ZONE,
+    },
+    separators=(",", ":"),
+)
 
-def build_device_json(device_id: str) -> str:
-    """Build Device header JSON; device_id should be stable per HA config entry."""
-    return json.dumps(
-        {
-            "model": DEFAULT_DEVICE_MODEL,
-            "platform": DEFAULT_DEVICE_PLATFORM,
-            "os_version": "",
-            "device_id": device_id,
-            "product_name": DEFAULT_PRODUCT_NAME,
-            "product_version": DEFAULT_PRODUCT_VERSION,
-            "locale": DEFAULT_LOCALE,
-            "time_zone": DEFAULT_TIME_ZONE,
-        },
-        separators=(",", ":"),
-    )
+# Feidee API error codes (auth)
+ERR_INVALID_CREDENTIALS = 4112
+ERR_CLIENT_PARAMS = 4099
+CAPTCHA_BASE_URL = "https://cloud.feidee.com/"
+CAPTCHA_VERIFY_BASE = "https://verification.feidee.net/v1/captcha/session"
+
+
+class FeideeApiError(Exception):
+    """Feidee API returned an error response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int | None = None,
+        status_code: int | None = None,
+        response_body: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.response_body = response_body
+
+
+class FeideeAuthError(FeideeApiError):
+    """Authentication failed."""
+
+
+def normalize_phone(phone: str) -> str:
+    """Normalize phone for Feidee login (same as 随手记.py: 11-digit mobile, no 86 prefix)."""
+    cleaned = re.sub(r"\D", "", phone.strip())
+    if cleaned.startswith("86") and len(cleaned) > 11:
+        cleaned = cleaned[2:]
+    return cleaned
+
+
+def normalize_password(password: str) -> str:
+    return password.strip()
+
+
+def resolve_device_id(device_id: str | None = None) -> str:
+    return device_id or DEFAULT_DEVICE_ID
 
 
 class _RequestContext:
-    """Per-client request context (device id + cached device JSON)."""
-
-    def __init__(self, device_id: str, user_agent: str = DEFAULT_USER_AGENT) -> None:
-        self.device_id = device_id
+    def __init__(self, device_id: str | None = None, user_agent: str = DEFAULT_USER_AGENT) -> None:
+        self.device_id = resolve_device_id(device_id)
         self.user_agent = user_agent
-        self.device_json = build_device_json(device_id)
+        # Login/business headers use the same fixed DEVICE_JSON as 随手记.py
+        self.device_json = DEVICE_JSON if self.device_id == DEFAULT_DEVICE_ID else json.dumps(
+            {
+                "model": DEFAULT_DEVICE_MODEL,
+                "platform": DEFAULT_DEVICE_PLATFORM,
+                "os_version": "",
+                "device_id": self.device_id,
+                "product_name": DEFAULT_PRODUCT_NAME,
+                "product_version": DEFAULT_PRODUCT_VERSION,
+                "locale": DEFAULT_LOCALE,
+                "time_zone": DEFAULT_TIME_ZONE,
+            },
+            separators=(",", ":"),
+        )
+        self.vcid: str = ""
+        self.vid: str = ""
 
 
 def _gen_sign(client_key: str, secret: str) -> tuple[str, str, str]:
@@ -124,26 +181,171 @@ def gen_business_headers(
     return headers
 
 
+def _parse_error_response(response: httpx.Response) -> tuple[int | None, str]:
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            code = data.get("code")
+            message = data.get("message") or data.get("msg") or response.text
+            return (int(code) if code is not None else None, str(message))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return (None, response.text[:500])
+
+
+def _first_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and value:
+        return _first_text(value[0])
+    if isinstance(value, dict):
+        for key in ("url", "image_url", "img_url", "src", "code", "value", "data"):
+            if key in value:
+                return _first_text(value[key])
+    return ""
+
+
+def _extract_captcha_image_url(payload: Any) -> str:
+    if isinstance(payload, dict):
+        for key in ("image_url", "url", "image", "img", "captcha_url", "base_url"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                if value.startswith("http"):
+                    return value
+                if key == "base_url":
+                    continue
+                return f"{CAPTCHA_BASE_URL}{value.lstrip('/')}"
+        for value in payload.values():
+            found = _extract_captcha_image_url(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for item in payload:
+            found = _extract_captcha_image_url(item)
+            if found:
+                return found
+    elif isinstance(payload, str):
+        if payload.startswith("http"):
+            return payload
+        if "vfcenter/" in payload:
+            return f"{CAPTCHA_BASE_URL}{payload.lstrip('/')}"
+    return ""
+
+
+async def _get_captcha_session(client: httpx.AsyncClient, ctx: _RequestContext) -> dict[str, Any]:
+    response = await client.get(
+        "https://verification.feidee.net/v1/captcha/session/code",
+        params={"style": "normal", "t": str(int(time.time() * 1000))},
+        headers=gen_login_headers(ctx),
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def _fetch_captcha_image(client: httpx.AsyncClient, image_url: str) -> Path:
+    if not image_url.startswith("http"):
+        image_url = f"{CAPTCHA_BASE_URL}{image_url.lstrip('/') }"
+    response = await client.get(image_url, headers={"Referer": REFERER})
+    response.raise_for_status()
+    fd, tmp_path = tempfile.mkstemp(prefix="feidee_captcha_", suffix=".png")
+    Path(tmp_path).write_bytes(response.content)
+    return Path(tmp_path)
+
+
+async def _verify_captcha(
+    client: httpx.AsyncClient, ctx: _RequestContext, vcid: str, captcha_code: str
+) -> dict[str, Any]:
+    payload = {"s": json.dumps({"code": captcha_code}, ensure_ascii=False)}
+    response = await client.post(
+        f"{CAPTCHA_VERIFY_BASE}/{vcid}/code/verification",
+        params={"t": str(int(time.time() * 1000))},
+        json=payload,
+        headers=gen_login_headers(ctx),
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 async def api_login(
     client: httpx.AsyncClient, ctx: _RequestContext, phone: str, password: str
 ) -> dict[str, Any]:
+    phone = normalize_phone(phone)
+    password = normalize_password(password)
     password_sha1 = hashlib.sha1(password.encode()).hexdigest()
+    if not ctx.vcid or not ctx.vid:
+        session = await _get_captcha_session(client, ctx)
+        ctx.vcid = str(session.get("vcid") or session.get("data", {}).get("vcid") or "")
+        image_url = _extract_captcha_image_url(session)
+        if image_url:
+            try:
+                image_path = await _fetch_captcha_image(client, image_url)
+                _LOGGER.info("Feidee captcha image saved to %s", image_path)
+            except Exception as exc:
+                _LOGGER.warning("Failed to fetch captcha image: %s", exc)
+        captcha_code = input("请输入飞蛋图片验证码: ").strip()
+        try:
+            verified = await _verify_captcha(client, ctx, ctx.vcid, captcha_code)
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            raise FeideeAuthError(
+                f"Captcha verification failed (HTTP {exc.response.status_code})",
+                status_code=exc.response.status_code,
+                response_body=body,
+            ) from exc
+        ctx.vid = str(
+            verified.get("vid")
+            or verified.get("data", {}).get("vid")
+            or verified.get("token")
+            or ""
+        )
+        if not ctx.vid:
+            raise FeideeAuthError(
+                "Captcha verification succeeded but no vid was returned",
+                response_body=json.dumps(verified, ensure_ascii=False)[:500],
+            )
+
     params = {
         "grant_type": GRANT_TYPE,
         "encode_version": ENCODE_VERSION,
         "scope": OAUTH_SCOPE,
         "username": phone,
         "password": password_sha1,
-        "vcid": "",
-        "vid": "",
+        "vcid": ctx.vcid,
+        "vid": ctx.vid,
     }
     response = await client.get(
         f"{AUTH_BASE}/v2/oauth2/authorize",
         params=params,
         headers=gen_login_headers(ctx),
     )
-    response.raise_for_status()
-    return response.json()
+
+    try:
+        data = response.json()
+    except json.JSONDecodeError as err:
+        raise FeideeAuthError(
+            f"Invalid login response (HTTP {response.status_code})",
+            status_code=response.status_code,
+            response_body=response.text[:500],
+        ) from err
+
+    if response.is_success and isinstance(data, dict) and data.get("access_token"):
+        return data
+
+    code, message = _parse_error_response(response)
+    _LOGGER.warning(
+        "Feidee login failed: HTTP %s code=%s message=%s phone=%s device_id=%s",
+        response.status_code,
+        code,
+        message,
+        phone[:3] + "****",
+        ctx.device_id,
+    )
+    raise FeideeAuthError(
+        message or "Login failed",
+        code=code,
+        status_code=response.status_code,
+        response_body=response.text[:500],
+    )
 
 
 async def api_list_books(
@@ -153,7 +355,14 @@ async def api_list_books(
         f"{YUN_BASE}/cab-index-ws/v3/book-group/cloud",
         headers=gen_business_headers(ctx, access_token),
     )
-    response.raise_for_status()
+    if not response.is_success:
+        code, message = _parse_error_response(response)
+        raise FeideeApiError(
+            message or "Failed to list books",
+            code=code,
+            status_code=response.status_code,
+            response_body=response.text[:500],
+        )
     return response.json().get("cloud_book_list", [])
 
 
@@ -256,20 +465,37 @@ def sum_account_balances(accounts: list[dict[str, Any]]) -> float:
 class FeideeClient:
     """Async Feidee API client with automatic re-login on 401."""
 
-    def __init__(self, phone: str, password: str, device_id: str) -> None:
-        self.phone = phone
-        self.password = password
-        self._ctx = _RequestContext(device_id=device_id)
+    def __init__(
+        self,
+        phone: str,
+        password: str,
+        device_id: str | None = None,
+        vcid: str | None = None,
+        vid: str | None = None,
+    ) -> None:
+        self.phone = normalize_phone(phone)
+        self.password = normalize_password(password)
+        self._ctx = _RequestContext(device_id)
+        self._ctx.vcid = vcid or ""
+        self._ctx.vid = vid or ""
         self.access_token: Optional[str] = None
         self._http = httpx.AsyncClient(timeout=30.0)
 
     async def close(self) -> None:
         await self._http.aclose()
 
-    async def login(self) -> None:
+    async def __aenter__(self) -> FeideeClient:
+        await self.login()
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.close()
+
+    async def login(self) -> dict[str, Any]:
         result = await api_login(self._http, self._ctx, self.phone, self.password)
         self.access_token = result["access_token"]
-        _LOGGER.debug("Feidee login successful")
+        _LOGGER.debug("Feidee login successful for device_id=%s", self._ctx.device_id)
+        return result
 
     async def _call(self, func, *args, **kwargs):
         if not self.access_token:
