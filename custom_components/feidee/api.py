@@ -127,8 +127,6 @@ class _RequestContext:
             },
             separators=(",", ":"),
         )
-        self.vcid: str = ""
-        self.vid: str = ""
 
 
 def _gen_sign(client_key: str, secret: str) -> tuple[str, str, str]:
@@ -244,7 +242,7 @@ async def _get_captcha_session(client: httpx.AsyncClient, ctx: _RequestContext) 
 
 async def _fetch_captcha_image(client: httpx.AsyncClient, image_url: str) -> Path:
     if not image_url.startswith("http"):
-        image_url = f"{CAPTCHA_BASE_URL}{image_url.lstrip('/') }"
+        image_url = f"{CAPTCHA_BASE_URL}{image_url.lstrip('/')}"
     response = await client.get(image_url, headers={"Referer": REFERER})
     response.raise_for_status()
     fd, tmp_path = tempfile.mkstemp(prefix="feidee_captcha_", suffix=".png")
@@ -266,43 +264,52 @@ async def _verify_captcha(
     return response.json()
 
 
+async def api_prepare_login(
+    client: httpx.AsyncClient, ctx: _RequestContext
+) -> dict[str, Any]:
+    session = await _get_captcha_session(client, ctx)
+    vcid = str(session.get("vcid") or session.get("data", {}).get("vcid") or "")
+    image_url = _extract_captcha_image_url(session)
+    image_path: str | None = None
+    if image_url:
+        try:
+            image_path = str(await _fetch_captcha_image(client, image_url))
+        except Exception as exc:
+            _LOGGER.warning("Failed to fetch captcha image: %s", exc)
+    return {
+        "vcid": vcid,
+        "image_url": image_url,
+        "image_path": image_path,
+        "raw": session,
+    }
+
+
+async def api_verify_captcha(
+    client: httpx.AsyncClient, ctx: _RequestContext, vcid: str, captcha_code: str
+) -> dict[str, Any]:
+    verified = await _verify_captcha(client, ctx, vcid, captcha_code)
+    vid = str(
+        verified.get("vid")
+        or verified.get("data", {}).get("vid")
+        or verified.get("token")
+        or ""
+    )
+    if not vid:
+        raise FeideeAuthError(
+            "Captcha verification succeeded but no vid was returned",
+            response_body=json.dumps(verified, ensure_ascii=False)[:500],
+        )
+    return {"vid": vid, "raw": verified}
+
+
 async def api_login(
     client: httpx.AsyncClient, ctx: _RequestContext, phone: str, password: str
 ) -> dict[str, Any]:
     phone = normalize_phone(phone)
     password = normalize_password(password)
     password_sha1 = hashlib.sha1(password.encode()).hexdigest()
-    if not ctx.vcid or not ctx.vid:
-        session = await _get_captcha_session(client, ctx)
-        ctx.vcid = str(session.get("vcid") or session.get("data", {}).get("vcid") or "")
-        image_url = _extract_captcha_image_url(session)
-        if image_url:
-            try:
-                image_path = await _fetch_captcha_image(client, image_url)
-                _LOGGER.info("Feidee captcha image saved to %s", image_path)
-            except Exception as exc:
-                _LOGGER.warning("Failed to fetch captcha image: %s", exc)
-        captcha_code = input("请输入飞蛋图片验证码: ").strip()
-        try:
-            verified = await _verify_captcha(client, ctx, ctx.vcid, captcha_code)
-        except httpx.HTTPStatusError as exc:
-            body = exc.response.text[:500]
-            raise FeideeAuthError(
-                f"Captcha verification failed (HTTP {exc.response.status_code})",
-                status_code=exc.response.status_code,
-                response_body=body,
-            ) from exc
-        ctx.vid = str(
-            verified.get("vid")
-            or verified.get("data", {}).get("vid")
-            or verified.get("token")
-            or ""
-        )
-        if not ctx.vid:
-            raise FeideeAuthError(
-                "Captcha verification succeeded but no vid was returned",
-                response_body=json.dumps(verified, ensure_ascii=False)[:500],
-            )
+    if not getattr(ctx, "vcid", "") or not getattr(ctx, "vid", ""):
+        raise FeideeAuthError("Captcha credentials missing before login")
 
     params = {
         "grant_type": GRANT_TYPE,
@@ -496,6 +503,15 @@ class FeideeClient:
         self.access_token = result["access_token"]
         _LOGGER.debug("Feidee login successful for device_id=%s", self._ctx.device_id)
         return result
+
+    async def prepare_captcha(self) -> dict[str, Any]:
+        return await api_prepare_login(self._http, self._ctx)
+
+    async def verify_captcha(self, vcid: str, captcha_code: str) -> dict[str, Any]:
+        verified = await api_verify_captcha(self._http, self._ctx, vcid, captcha_code)
+        self._ctx.vcid = vcid
+        self._ctx.vid = verified["vid"]
+        return verified
 
     async def _call(self, func, *args, **kwargs):
         if not self.access_token:

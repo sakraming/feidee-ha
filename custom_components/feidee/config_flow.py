@@ -94,6 +94,8 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._password: str = ""
         self._books: list[dict[str, Any]] = []
         self._selected_books: list[dict[str, str]] = []
+        self._captcha_vcid: str = ""
+        self._captcha_image_url: str = ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -103,10 +105,12 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             phone = normalize_phone(user_input[CONF_PHONE])
             password = normalize_password(user_input[CONF_PASSWORD])
+            client = FeideeClient(phone, password)
             try:
-                books = await _validate_login(phone, password)
+                login_result = await client.prepare_captcha()
             except httpx.RequestError as err:
                 _LOGGER.error("Connection error: %s", err)
+                await client.close()
                 errors["base"] = "cannot_connect"
             except FeideeAuthError as err:
                 _LOGGER.error(
@@ -116,6 +120,7 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     getattr(err, "status_code", None),
                     getattr(err, "response_body", None),
                 )
+                await client.close()
                 errors["base"] = _map_login_error(err)
             except FeideeApiError as err:
                 _LOGGER.error(
@@ -125,20 +130,75 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     getattr(err, "status_code", None),
                     getattr(err, "response_body", None),
                 )
+                await client.close()
                 errors["base"] = _map_login_error(err)
             else:
-                if not books:
-                    errors["base"] = "no_books"
-                else:
-                    self._phone = phone
-                    self._password = password
-                    self._books = books
-                    return await self.async_step_book()
+                self._phone = phone
+                self._password = password
+                self._books = []
+                self._captcha_vcid = str(login_result.get("vcid", ""))
+                self._captcha_image_url = str(login_result.get("image_url", ""))
+                await client.close()
+                return await self.async_step_captcha()
 
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_SCHEMA,
             errors=errors,
+        )
+
+    async def async_step_captcha(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            captcha_code = user_input.get("captcha_code", "").strip()
+            if not captcha_code:
+                errors["base"] = "captcha_required"
+            else:
+                client = FeideeClient(self._phone, self._password)
+                try:
+                    await client.verify_captcha(self._captcha_vcid, captcha_code)
+                    await client.login()
+                    books = await client.list_books()
+                except httpx.RequestError as err:
+                    _LOGGER.error("Connection error during captcha flow: %s", err)
+                    errors["base"] = "cannot_connect"
+                except FeideeAuthError as err:
+                    _LOGGER.error(
+                        "Captcha/login failed: %s (code=%s http=%s body=%s)",
+                        err,
+                        getattr(err, "code", None),
+                        getattr(err, "status_code", None),
+                        getattr(err, "response_body", None),
+                    )
+                    errors["base"] = _map_login_error(err)
+                except FeideeApiError as err:
+                    _LOGGER.error(
+                        "Captcha/API failed: %s (code=%s http=%s body=%s)",
+                        err,
+                        getattr(err, "code", None),
+                        getattr(err, "status_code", None),
+                        getattr(err, "response_body", None),
+                    )
+                    errors["base"] = _map_login_error(err)
+                else:
+                    await client.close()
+                    if not books:
+                        errors["base"] = "no_books"
+                    else:
+                        self._books = books
+                        return await self.async_step_book()
+                finally:
+                    await client.close()
+
+        schema = vol.Schema({vol.Required("captcha_code"): str})
+        description_placeholders = {"image_url": self._captcha_image_url or ""}
+        return self.async_show_form(
+            step_id="captcha",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=description_placeholders,
         )
 
     async def async_step_book(

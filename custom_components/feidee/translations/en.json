@@ -3,10 +3,17 @@
     "step": {
       "user": {
         "title": "Feidee login",
-        "description": "Enter your Feidee phone number and password; if a captcha is required, the flow will guide you through it",
+        "description": "Enter your Feidee phone number and password",
         "data": {
           "phone": "Phone",
           "password": "Password"
+        }
+      },
+      "captcha": {
+        "title": "Feidee captcha",
+        "description": "Captcha image URL: {{ image_url }}",
+        "data": {
+          "captcha_code": "Enter the image captcha"
         }
       },
       "book": {

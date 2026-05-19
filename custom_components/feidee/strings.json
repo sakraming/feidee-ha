@@ -3,9 +3,9 @@
     "step": {
       "user": {
         "title": "飞蛋记账登录",
-        "description": "输入飞蛋账号（手机号）和密码",
+        "description": "输入飞蛋账号（手机号）和密码；如触发验证码，系统会自动引导你完成验证",
         "data": {
-          "phone": "手机号",
+          "phone": "手机号（11位，无需加86）",
           "password": "密码"
         }
       },
@@ -30,6 +30,7 @@
       "no_books": "账号下没有云端账本",
       "no_books_selected": "请至少选择一个账本",
       "no_sensors_selected": "请至少选择一个指标",
+      "client_error": "飞蛋服务器拒绝了客户端参数，请更新集成到最新版后重试",
       "unknown": "未知错误，请查看日志"
     },
     "abort": {

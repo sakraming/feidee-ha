@@ -3,10 +3,17 @@
     "step": {
       "user": {
         "title": "飞蛋记账登录",
-        "description": "输入飞蛋账号（手机号）和密码；如触发验证码，系统会自动引导你完成验证",
+        "description": "输入飞蛋账号（手机号）和密码",
         "data": {
           "phone": "手机号（11位，无需加86）",
           "password": "密码"
+        }
+      },
+      "captcha": {
+        "title": "飞蛋验证码",
+        "description": "验证码图片地址：{{ image_url }}",
+        "data": {
+          "captcha_code": "请输入图片验证码"
         }
       },
       "book": {
