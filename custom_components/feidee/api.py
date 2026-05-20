@@ -287,7 +287,14 @@ async def api_prepare_login(
 async def api_verify_captcha(
     client: httpx.AsyncClient, ctx: _RequestContext, vcid: str, captcha_code: str
 ) -> dict[str, Any]:
-    verified = await _verify_captcha(client, ctx, vcid, captcha_code)
+    try:
+        verified = await _verify_captcha(client, ctx, vcid, captcha_code)
+    except httpx.HTTPStatusError as exc:
+        raise FeideeAuthError(
+            f"Captcha verification failed (HTTP {exc.response.status_code})",
+            status_code=exc.response.status_code,
+            response_body=exc.response.text[:500],
+        ) from exc
     vid = str(
         verified.get("vid")
         or verified.get("data", {}).get("vid")

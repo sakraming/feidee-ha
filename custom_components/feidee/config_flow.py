@@ -158,7 +158,8 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 client = FeideeClient(self._phone, self._password)
                 try:
-                    await client.verify_captcha(self._captcha_vcid, captcha_code)
+                    verified = await client.verify_captcha(self._captcha_vcid, captcha_code)
+                    _LOGGER.debug("Captcha verified: %s", verified)
                     await client.login()
                     books = await client.list_books()
                 except httpx.RequestError as err:
@@ -183,7 +184,6 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                     errors["base"] = _map_login_error(err)
                 else:
-                    await client.close()
                     if not books:
                         errors["base"] = "no_books"
                     else:
