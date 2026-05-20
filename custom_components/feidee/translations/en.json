@@ -11,9 +11,10 @@
       },
       "captcha": {
         "title": "Feidee captcha",
-        "description": "Captcha image URL: {{ image_url }}",
+        "description": "Enter the captcha code below; image URL: {{ captcha_url }}",
         "data": {
-          "captcha_code": "Enter the image captcha"
+          "captcha_url": "Captcha image URL",
+          "captcha_code": "Captcha code"
         }
       },
       "book": {
