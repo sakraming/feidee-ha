@@ -287,12 +287,13 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _sensors_schema(self) -> vol.Schema:
         return vol.Schema({vol.Required(CONF_SENSOR_KEYS): selector.selector(_sensor_selector())})
 
-    @staticmethod
-    @callback
-    def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> FeideeOptionsFlowHandler:
-        return FeideeOptionsFlowHandler(config_entry)
+
+
+@callback
+def async_get_options_flow(
+    config_entry: config_entries.ConfigEntry,
+) -> FeideeOptionsFlowHandler:
+    return FeideeOptionsFlowHandler(config_entry)
 
 
 class FeideeOptionsFlowHandler(config_entries.OptionsFlow):

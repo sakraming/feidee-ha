@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 REPO="${1:-zhangqiming/feidee-ha}"
-VERSION="v0.4.0"
+VERSION="v0.4.2"
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "Install GitHub CLI: brew install gh"
