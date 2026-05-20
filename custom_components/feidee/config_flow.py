@@ -193,11 +193,12 @@ class FeideeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     await client.close()
 
         schema = vol.Schema({vol.Required("captcha_code"): str})
+        captcha_url = self._captcha_image_url or ""
         return self.async_show_form(
             step_id="captcha",
             data_schema=schema,
             errors=errors,
-            description_placeholders={"captcha_url": self._captcha_image_url or ""},
+            description_placeholders={"captcha_url": captcha_url},
         )
 
     async def async_step_book(
