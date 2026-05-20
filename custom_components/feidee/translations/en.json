@@ -11,9 +11,8 @@
       },
       "captcha": {
         "title": "Feidee captcha",
-        "description": "Enter the captcha code below; image URL: {{ captcha_url }}",
+        "description": "Captcha image URL: {{ captcha_url }}",
         "data": {
-          "captcha_url": "Captcha image URL",
           "captcha_code": "Captcha code"
         }
       },
