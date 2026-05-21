@@ -11,8 +11,9 @@
       },
       "captcha": {
         "title": "飞蛋验证码",
-        "description": "验证码图片地址：{{ captcha_url }}",
+        "description": "验证码图片链接已填在表单中，请打开查看",
         "data": {
+          "captcha_url": "验证码图片链接",
           "captcha_code": "请输入图片验证码"
         }
       },
