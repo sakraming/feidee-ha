@@ -315,8 +315,8 @@ async def api_login(
     phone = normalize_phone(phone)
     password = normalize_password(password)
     password_sha1 = hashlib.sha1(password.encode()).hexdigest()
-    if not getattr(ctx, "vcid", "") or not getattr(ctx, "vid", ""):
-        raise FeideeAuthError("Captcha credentials missing before login")
+    vcid = getattr(ctx, "vcid", "")
+    vid = getattr(ctx, "vid", "")
 
     params = {
         "grant_type": GRANT_TYPE,
@@ -324,8 +324,8 @@ async def api_login(
         "scope": OAUTH_SCOPE,
         "username": phone,
         "password": password_sha1,
-        "vcid": ctx.vcid,
-        "vid": ctx.vid,
+        "vcid": vcid,
+        "vid": vid,
     }
     response = await client.get(
         f"{AUTH_BASE}/v2/oauth2/authorize",
@@ -346,6 +346,13 @@ async def api_login(
         return data
 
     code, message = _parse_error_response(response)
+    if code in {5126} or response.status_code in {401, 403}:
+        raise FeideeAuthError(
+            message or "Captcha or login required",
+            code=code,
+            status_code=response.status_code,
+            response_body=response.text[:500],
+        )
     _LOGGER.warning(
         "Feidee login failed: HTTP %s code=%s message=%s phone=%s device_id=%s",
         response.status_code,

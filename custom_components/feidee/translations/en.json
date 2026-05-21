@@ -39,6 +39,8 @@
       "no_books_selected": "Select at least one book",
       "no_sensors_selected": "Select at least one metric",
       "client_error": "Feidee rejected client parameters; update the integration and retry",
+      "captcha_failed": "Captcha verification failed, please try again",
+      "captcha_required": "Please enter the captcha code",
       "unknown": "Unknown error, check logs"
     },
     "abort": {

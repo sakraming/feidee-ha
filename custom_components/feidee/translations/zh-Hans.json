@@ -39,6 +39,8 @@
       "no_books_selected": "请至少选择一个账本",
       "no_sensors_selected": "请至少选择一个指标",
       "client_error": "飞蛋服务器拒绝了客户端参数，请更新集成到最新版后重试",
+      "captcha_failed": "验证码校验失败，请重新输入",
+      "captcha_required": "请输入验证码",
       "unknown": "未知错误，请查看日志"
     },
     "abort": {
