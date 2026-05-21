@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -500,10 +501,17 @@ class FeideeClient:
         self._ctx.vcid = vcid or ""
         self._ctx.vid = vid or ""
         self.access_token: Optional[str] = None
-        self._http = httpx.AsyncClient(timeout=30.0)
+        self._http: httpx.AsyncClient | None = None
+
+    async def _ensure_http(self) -> httpx.AsyncClient:
+        if self._http is None:
+            self._http = await asyncio.to_thread(httpx.AsyncClient, timeout=30.0)
+        return self._http
 
     async def close(self) -> None:
-        await self._http.aclose()
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
 
     async def __aenter__(self) -> FeideeClient:
         await self.login()
@@ -513,25 +521,29 @@ class FeideeClient:
         await self.close()
 
     async def login(self) -> dict[str, Any]:
-        result = await api_login(self._http, self._ctx, self.phone, self.password)
+        http = await self._ensure_http()
+        result = await api_login(http, self._ctx, self.phone, self.password)
         self.access_token = result["access_token"]
         _LOGGER.debug("Feidee login successful for device_id=%s", self._ctx.device_id)
         return result
 
     async def prepare_captcha(self) -> dict[str, Any]:
-        return await api_prepare_login(self._http, self._ctx)
+        http = await self._ensure_http()
+        return await api_prepare_login(http, self._ctx)
 
     async def verify_captcha(self, vcid: str, captcha_code: str) -> dict[str, Any]:
-        verified = await api_verify_captcha(self._http, self._ctx, vcid, captcha_code)
+        http = await self._ensure_http()
+        verified = await api_verify_captcha(http, self._ctx, vcid, captcha_code)
         self._ctx.vcid = vcid
         self._ctx.vid = verified["vid"]
         return verified
 
     async def _call(self, func, *args, **kwargs):
+        http = await self._ensure_http()
         if not self.access_token:
             await self.login()
         try:
-            return await func(self._http, self._ctx, self.access_token, *args, **kwargs)
+            return await func(http, self._ctx, self.access_token, *args, **kwargs)
         except httpx.HTTPStatusError as err:
             if err.response.status_code == 401:
                 _LOGGER.warning("Feidee token expired, re-logging in")
